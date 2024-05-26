@@ -4,6 +4,9 @@ from datetime import datetime
 from dataclasses import dataclass
 from datetime import timedelta
 import json
+from collections import defaultdict
+from typing import List
+
 
 class ExchangeRateData:
     def __init__(self, exchange_rate_csv: str):
@@ -102,6 +105,41 @@ class TransactionDetailsProcessed:
     corrected_capital_gain_eur: float
 
 
+@dataclass
+class TaxSummary:
+    # Total acquisition gain over all transactions
+    total_vest_gain_eur: float
+    # Total capital gain over all transactions
+    total_capital_gain_eur: float
+    # Total sale price over all transactions (ie what you should have received on your bank account)
+    total_sale_price_eur: float
+    # Total tax relief over all transactions
+    total_tax_relief_eur: float
+    # Total acquisition gain over all transactions, after removing capital losses
+    total_corrected_vest_gain_eur: float
+    # Total capital gain over all transactions, after removing capital losses
+    total_corrected_capital_gain_eur: float
+    # Total acquisition gain over all transactions, below 300K EUR
+    total_corrected_vest_gain_eur_below300k: float
+    # Total acquisition gain over all transactions, above 300K EUR
+    total_corrected_vest_gain_eur_above300k: float
+    # Total tax relief over all transactions, that is applicable on the acquistion gain below 300k EUR
+    total_valid_tax_relief_eur: float
+
+    # Social contributions on the corrected acquisition gain
+    social_contributions_on_vest_gain: float
+    # Tax on the on the corrected acquistion gain
+    tax_on_vest_gain: float
+    # Salary contribution on the corrected acquisition gain
+    salary_contribution: float
+    # Tax on the corrected capital gain
+    tax_on_capital_gain: float
+    # Total tax to be paid
+    total_tax: float
+    # Average tax rate over all transactions
+    total_tax_rate: float
+
+
 def load_transactions_details(schwab_json: str, year: int):
     """
     Load and parse transaction details from a Schwab JSON file for a specific year.
@@ -140,6 +178,49 @@ def load_transactions_details(schwab_json: str, year: int):
             )
             transactions_details.append(transaction)
     return transactions_details
+
+
+def group_transactions(
+    transactions: List[TransactionDetails],
+) -> List[TransactionDetails]:
+    """
+    The Schwab JSON file contains multiple transactions for the same (vesting date, sell date).
+    They are grouped together in this function.
+
+    Args:
+        transactions (List[TransactionDetails]): A list of transactions.
+
+    Returns:
+        List[TransactionDetails]: A list of transactions grouped by vesting date.
+    """
+    grouped_transactions = defaultdict(list)
+
+    for transaction in transactions:
+        key = (transaction.vest_date, transaction.sale_date)
+        grouped_transactions[key].append(transaction)
+
+    # Now, reduce each group
+    reduced_transactions = []
+    for group in grouped_transactions.values():
+        if len(group) > 1:
+            assert all(
+                abs(tr.vest_price_usd - group[0].vest_price_usd) < 0.01 for tr in group
+            )
+            assert all(
+                abs(tr.sale_price_usd - group[0].sale_price_usd) < 0.01 for tr in group
+            )
+            transaction = TransactionDetails(
+                num_shares=sum(tr.num_shares for tr in group),
+                vest_date=group[0].vest_date,
+                vest_price_usd=group[0].vest_price_usd,
+                sale_date=group[0].sale_date,
+                sale_price_usd=group[0].sale_price_usd,
+            )
+            reduced_transactions.append(transaction)
+        else:
+            reduced_transactions.append(group[0])
+
+    return reduced_transactions
 
 
 def process_transaction(
@@ -235,88 +316,99 @@ def process_all_transactions(transactions: list, change_data: ExchangeRateData) 
     return processed_transactions
 
 
-def summarize_transactions(trs: TransactionDetailsProcessed):
+def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary:
     """
     Summarize the processed transactions.
 
     Args:
         trs (list): A list of TransactionDetailsProcessed objects.
+        mtr (float): Marginal tax rate
 
     Returns:
         dict: A dictionary containing the summary of the transactions.
     """
-    summary = {
-        "total_vest_gain_eur": sum(tr.total_vest_gain_eur for tr in trs),
-        "total_capital_gain_eur": sum(tr.total_capital_gain_eur for tr in trs),
-        "total_sale_price_eur": sum(tr.total_sale_price_eur for tr in trs),
-        "total_tax_relief_eur": sum(tr.taxe_relief_eur for tr in trs),
-        "total_corrected_vest_gain_eur": sum(tr.corrected_vest_gain_eur for tr in trs),
-        "total_corrected_capital_gain_eur": sum(
-            tr.corrected_capital_gain_eur for tr in trs
-        ),
-    }
+    total_vest_gain_eur = sum(tr.total_vest_gain_eur for tr in trs)
+    total_capital_gain_eur = sum(tr.total_capital_gain_eur for tr in trs)
+    total_sale_price_eur = sum(tr.total_sale_price_eur for tr in trs)
+    total_tax_relief_eur = sum(tr.taxe_relief_eur for tr in trs)
+    total_corrected_vest_gain_eur = sum(tr.corrected_vest_gain_eur for tr in trs)
+    total_corrected_capital_gain_eur = sum(tr.corrected_capital_gain_eur for tr in trs)
+
     # TODO(lowik) Not sure how to deal with the case where the acquisition gain is above 300k
     # and the tax relief is applied only on the first 300k.
     # For now:
     # - compute the average tax relief percentage
     # - split the total acquisition gain between the first 300k and the rest
     # - apply the tax relief percentage on the first 300k
-    avg_tax_relief_percentage = (
-        summary["total_tax_relief_eur"] / summary["total_corrected_vest_gain_eur"]
-    )
-    if summary["total_corrected_vest_gain_eur"] > 300000:
-        summary["total_corrected_vest_gain_eur_below300k"] = 300000
-        summary["total_corrected_vest_gain_eur_above300k"] = (
-            summary["total_corrected_vest_gain_eur"] - 300000
+    avg_tax_relief_percentage = total_tax_relief_eur / total_corrected_vest_gain_eur
+    threshold = 300000
+    if total_corrected_vest_gain_eur > threshold:
+        total_corrected_vest_gain_eur_below300k = threshold
+        total_corrected_vest_gain_eur_above300k = (
+            total_corrected_vest_gain_eur - threshold
         )
-        summary["total_valid_tax_relief_eur"] = 300000 * avg_tax_relief_percentage
+        total_valid_tax_relief_eur = threshold * avg_tax_relief_percentage
     else:
-        summary["total_corrected_vest_gain_eur_below300k"] = summary[
-            "total_corrected_vest_gain_eur"
-        ]
-        summary["total_corrected_vest_gain_eur_above300k"] = 0
-        summary["total_valid_tax_relief_eur"] = summary["total_tax_relief_eur"]
-    return summary
+        total_corrected_vest_gain_eur_below300k = total_corrected_vest_gain_eur
+        total_corrected_vest_gain_eur_above300k = 0
+        total_valid_tax_relief_eur = total_tax_relief_eur
 
-
-def compute_estimated_taxes(summary, tmi: float):
-    """
-    Compute the estimated taxes based on the summary of the transactions and the tax rate.
-
-    Args:
-        summary (dict): A dictionary containing the summary of the transactions.
-        tmi (float): The tax rate.
-
-    Returns:
-        float: The estimated taxes.
-    """
+    # Compute taxes
     # Taxes on acquisition gain
-    # for the part below 300k
-    prevelement_sociaux = (
-        17.2 / 100 * summary["total_corrected_vest_gain_eur_below300k"]
+    # for the part below 300k, it's 17.2% of social contribution on the full acquisition gain
+    # and MTR (Marginal tax Rate) on the acquistion gain minus the tax relief
+    social_contributions_on_vest_gain = (
+        17.2 / 100 * total_corrected_vest_gain_eur_below300k
     )
-    tax_gain = tmi * (
-        summary["total_corrected_vest_gain_eur_below300k"]
-        - summary["total_valid_tax_relief_eur"]
+    tax_on_vest_gain = mtr * (
+        total_corrected_vest_gain_eur_below300k - total_valid_tax_relief_eur
     )
-    contribution_salariale = 0
-    # for the part above 300k
-    prevelement_sociaux += (
-        9.7 / 100 * summary["total_corrected_vest_gain_eur_above300k"]
-    )
-    tax_gain += tmi * summary["total_corrected_vest_gain_eur_above300k"]
-    contribution_salariale += (
-        10 / 100 * summary["total_corrected_vest_gain_eur_above300k"]
-    )
+    salary_contribution = 0
 
-    # Tax on capital gain
-    tax_capital_gain = 30 / 100 * summary["total_corrected_capital_gain_eur"]
+    # for the part above 300k
+    # It's 9.7% of social contributions and MTR on the full acquisition gain (no tax relief)
+    # There's also a 10% salary contribution
+    social_contributions_on_vest_gain += (
+        9.7 / 100 * total_corrected_vest_gain_eur_above300k
+    )
+    tax_on_vest_gain += mtr * total_corrected_vest_gain_eur_above300k
+    salary_contribution += 10 / 100 * total_corrected_vest_gain_eur_above300k
+
+    # Tax on capital gain, it's the 30% flat tax
+    tax_on_capital_gain = 30 / 100 * total_corrected_capital_gain_eur
 
     total_taxes = (
-        prevelement_sociaux + tax_gain + tax_capital_gain + contribution_salariale
+        social_contributions_on_vest_gain
+        + tax_on_vest_gain
+        + tax_on_capital_gain
+        + salary_contribution
     )
-    rate = total_taxes / summary["total_sale_price_eur"]
-    return total_taxes, rate
+    total_tax_rate = total_taxes / total_sale_price_eur
+
+    return TaxSummary(
+        total_vest_gain_eur=total_vest_gain_eur,
+        total_capital_gain_eur=total_capital_gain_eur,
+        total_sale_price_eur=total_sale_price_eur,
+        total_tax_relief_eur=total_tax_relief_eur,
+        total_corrected_vest_gain_eur=total_corrected_vest_gain_eur,
+        total_corrected_capital_gain_eur=total_corrected_capital_gain_eur,
+        total_corrected_vest_gain_eur_below300k=total_corrected_vest_gain_eur_below300k,
+        total_corrected_vest_gain_eur_above300k=total_corrected_vest_gain_eur_above300k,
+        total_valid_tax_relief_eur=total_valid_tax_relief_eur,
+        social_contributions_on_vest_gain=social_contributions_on_vest_gain,
+        tax_on_vest_gain=tax_on_vest_gain,
+        salary_contribution=salary_contribution,
+        tax_on_capital_gain=tax_on_capital_gain,
+        total_tax=total_taxes,
+        total_tax_rate=total_tax_rate,
+    )
+
+
+def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: str):
+    df = pd.DataFrame(trs)
+    df_rounded = df.round(4)
+    # Use this format so that Google Sheets can parse the number correctly
+    df_rounded.to_csv(csv_filename, sep='\t', float_format='%.2f', decimal=',')
 
 
 @click.command()
