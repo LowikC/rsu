@@ -100,9 +100,9 @@ class TransactionDetailsProcessed:
     # Tax relief amount in EUR
     taxe_relief_eur: float
     # Corrected total acquistion gain in EUR, after removing capital losses
-    corrected_vest_gain_eur: float
+    total_corrected_vest_gain_eur: float
     # Corrected total capital gain in EUR, after removing capital losses and applying tax relief
-    corrected_capital_gain_eur: float
+    total_corrected_capital_gain_eur: float
 
 
 @dataclass
@@ -140,6 +140,11 @@ class TaxSummary:
     total_tax_rate: float
 
 
+def convert_schwab_float_format(s: str) -> float:
+    # Format is $XXX,XXX.XX
+    return float(s.replace("$", "").replace(",", ""))
+
+
 def load_transactions_details(schwab_json: str, year: int):
     """
     Load and parse transaction details from a Schwab JSON file for a specific year.
@@ -155,28 +160,45 @@ def load_transactions_details(schwab_json: str, year: int):
     with open(schwab_json) as jfile:
         schwab_data = json.load(jfile)
     sales = [d for d in schwab_data["Transactions"] if d["Action"] == "Sale"]
-    # TODO(lowik) Could add a check on sale["Quantity"]
-    # TODO(lowik) Take into account the fees and commissions?
     transactions_details = []
     date_schwab_format = "%m/%d/%Y"
     for sale in sales:
         sale_date = datetime.strptime(sale["Date"], date_schwab_format)
         if sale_date.year != year:
             continue
+        # We will check at the end that the sum of the shares in the transactions is equal to the quantity in the sale event
+        # same for the total sale amount
+        sale_quantity = int(sale["Quantity"])
+        sale_amount_usd = convert_schwab_float_format(sale["Amount"])
+        fees_usd = convert_schwab_float_format(sale["FeesAndCommissions"])
+        transactions_in_sale = []
         for transaction_dict in sale["TransactionDetails"]:
             transaction_dict = transaction_dict["Details"]
             transaction = TransactionDetails(
                 num_shares=int(transaction_dict["Shares"]),
                 sale_date=sale_date,
-                # SalePrice format is $XXX.XXXX
-                sale_price_usd=float(transaction_dict["SalePrice"][1:]),
+                sale_price_usd=convert_schwab_float_format(
+                    transaction_dict["SalePrice"]
+                ),
                 vest_date=datetime.strptime(
                     transaction_dict["VestDate"], date_schwab_format
                 ),
-                # VestFairMarketValue format is $XXX.XXXX
-                vest_price_usd=float(transaction_dict["VestFairMarketValue"][1:]),
+                vest_price_usd=convert_schwab_float_format(
+                    transaction_dict["VestFairMarketValue"]
+                ),
             )
-            transactions_details.append(transaction)
+            transactions_in_sale.append(transaction)
+
+        # Check that we have the same number of shares as expected in the sale event and same total amount
+        total_num_shares = sum(tr.num_shares for tr in transactions_in_sale)
+        assert total_num_shares == sale_quantity
+        total_sale_amount_usd = (
+            sum(tr.num_shares * tr.sale_price_usd for tr in transactions_in_sale)
+            - fees_usd
+        )
+        assert abs(total_sale_amount_usd - sale_amount_usd) < 0.01
+
+        transactions_details.extend(transactions_in_sale)
     return transactions_details
 
 
@@ -252,15 +274,17 @@ def process_transaction(
 
     # Remove capital losses from acquisition gains
     if total_capital_gain_eur < 0:
-        if total_vest_gain_eur < abs(total_capital_gain_eur):
-            corrected_vest_gain_eur = 0
-            corrected_capital_gain_eur = total_capital_gain_eur + total_vest_gain_eur
+        if total_vest_gain_eur >= abs(total_capital_gain_eur):
+            total_corrected_vest_gain_eur = total_capital_gain_eur + total_vest_gain_eur
+            total_corrected_capital_gain_eur = 0
         else:
-            corrected_vest_gain_eur = total_vest_gain_eur + total_capital_gain_eur
-            corrected_capital_gain_eur = 0
+            # We cant subtract more that the total acquisition gain, so we set it to 0
+            # and still report a loss in the capital gain
+            total_corrected_vest_gain_eur = 0
+            total_corrected_capital_gain_eur = total_vest_gain_eur + total_capital_gain_eur
     else:
-        corrected_vest_gain_eur = total_vest_gain_eur
-        corrected_capital_gain_eur = total_capital_gain_eur
+        total_corrected_vest_gain_eur = total_vest_gain_eur
+        total_corrected_capital_gain_eur = total_capital_gain_eur
 
     # Check minimum detention periods for tax relief
     detention = src.sale_date - src.vest_date
@@ -269,9 +293,9 @@ def process_transaction(
 
     # Calculate tax relief amount
     if eligible_for_tax_relief_65p:
-        tax_relief = 0.65 * corrected_vest_gain_eur
+        tax_relief = 0.65 * total_corrected_vest_gain_eur
     elif eligible_for_tax_relief_50p:
-        tax_relief = 0.5 * corrected_vest_gain_eur
+        tax_relief = 0.5 * total_corrected_vest_gain_eur
     else:
         tax_relief = 0
 
@@ -293,8 +317,8 @@ def process_transaction(
         eligible_for_tax_relief_50p=eligible_for_tax_relief_50p,
         eligible_for_tax_relief_65p=eligible_for_tax_relief_65p,
         taxe_relief_eur=tax_relief,
-        corrected_vest_gain_eur=corrected_vest_gain_eur,
-        corrected_capital_gain_eur=corrected_capital_gain_eur,
+        total_corrected_vest_gain_eur=total_corrected_vest_gain_eur,
+        total_corrected_capital_gain_eur=total_corrected_capital_gain_eur,
     )
 
 
@@ -309,11 +333,7 @@ def process_all_transactions(transactions: list, change_data: ExchangeRateData) 
     Returns:
         list: A list of TransactionDetailsProcessed objects containing the processed transaction details.
     """
-    processed_transactions = []
-    for transaction in transactions:
-        processed_transaction = process_transaction(transaction, change_data)
-        processed_transactions.append(processed_transaction)
-    return processed_transactions
+    return [process_transaction(tr, change_data) for tr in transactions]
 
 
 def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary:
@@ -331,15 +351,15 @@ def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary
     total_capital_gain_eur = sum(tr.total_capital_gain_eur for tr in trs)
     total_sale_price_eur = sum(tr.total_sale_price_eur for tr in trs)
     total_tax_relief_eur = sum(tr.taxe_relief_eur for tr in trs)
-    total_corrected_vest_gain_eur = sum(tr.corrected_vest_gain_eur for tr in trs)
-    total_corrected_capital_gain_eur = sum(tr.corrected_capital_gain_eur for tr in trs)
+    total_corrected_vest_gain_eur = sum(tr.total_corrected_vest_gain_eur for tr in trs)
+    total_corrected_capital_gain_eur = sum(tr.total_corrected_capital_gain_eur for tr in trs)
 
     # TODO(lowik) Not sure how to deal with the case where the acquisition gain is above 300k
     # and the tax relief is applied only on the first 300k.
     # For now:
     # - compute the average tax relief percentage
     # - split the total acquisition gain between the first 300k and the rest
-    # - apply the tax relief percentage on the first 300k
+    # - apply the average tax relief percentage on the first 300k
     avg_tax_relief_percentage = total_tax_relief_eur / total_corrected_vest_gain_eur
     threshold = 300000
     if total_corrected_vest_gain_eur > threshold:
@@ -405,26 +425,122 @@ def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary
 
 
 def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: str):
+    trs.sort(key=lambda x: (x.sale_date, x.vest_date))
     df = pd.DataFrame(trs)
+    # Define the mapping between new names and old names
+    column_mapping = {
+        "num_shares": "Nombre de parts",
+        "vest_date": "Date d'acquisition",
+        "vest_price_usd": "Prix d'acquisition (USD)",
+        "sale_date": "Date de vente",
+        "sale_price_usd": "Prix de vente unitaire (USD)",
+        "vest_exchange_rate": "Taux de change EUR USD lors de l'acquisition",
+        "vest_price_eur": "Prix d'acquisition (EUR)",
+        "sale_exchange_rate": "Taux de change EUR USD lors de la vente",
+        "sale_price_eur": "Prix de vente unitaire (EUR)",
+        "capital_gain_eur": "Plus-value de cession unitaire (EUR)",
+        "total_vest_gain_eur": "Gain d'acquisition (EUR)",
+        "total_capital_gain_eur": "Plus-value de cession (EUR)",
+        "total_sale_price_eur": "Prix de vente (EUR)",
+        "detention": "Duree de detention (jours)",
+        "eligible_for_tax_relief_50p": "Eligible abattement pour duree de detention entre 2 ans et 8 ans",
+        "eligible_for_tax_relief_65p": "Eligible abattement pour duree de detention superieure a 8 ans",
+        "taxe_relief_eur": "Abattement (EUR)",
+        "corrected_vest_gain_eur": "Gain d'acquisition apres imputation des moins-values de cession (EUR)",
+        "corrected_capital_gain_eur": "Plus-value de cession apres imputation des moins-values de cession (EUR)",
+    }
+    # Rename the columns using the mapping
+    df = df.rename(columns=column_mapping)
     df_rounded = df.round(4)
     # Use this format so that Google Sheets can parse the number correctly
-    df_rounded.to_csv(csv_filename, sep='\t', float_format='%.2f', decimal=',')
+    df_rounded.to_csv(csv_filename, sep="\t", float_format="%.2f", decimal=",")
+
+def write_tax_estimate(summary: TaxSummary, txt_filename: str):
+    s = f"""
+    Montant total de la vente: {summary.total_sale_price_eur:.2f} EUR
+    Montant total des impots: {summary.total_tax:.2f} EUR
+    Taux d'imposition moyen: {summary.total_tax_rate*100:.2f}%
+    
+    Details:
+    - Gain d'acquisition total: {summary.total_corrected_vest_gain_eur:.2f} EUR
+        - Contributions sociales sur le gain d'acquisition: {summary.social_contributions_on_vest_gain:.2f} EUR
+        - Impots sur le gain d'acquisition: {summary.tax_on_vest_gain:.2f} EUR
+        - Contribution salariale sur le gain d'acquisition: {summary.salary_contribution:.2f} EUR
+    - Plus-value de cession total: {summary.total_corrected_capital_gain_eur:.2f} EUR
+        - Impots sur la plus-value de cession: {summary.tax_on_capital_gain:.2f} EUR
+    """
+    with open(txt_filename, "w") as f:
+        f.write(s)
+    
+def write_instructions(summary: TaxSummary, trs: List[TransactionDetailsProcessed], txt_filename: str):
+    s = f"""
+    Instructions:
+    - Remplir le formulaire 2042 C
+       Case 1TZ: {summary.total_corrected_vest_gain_eur_below300k - summary.total_valid_tax_relief_eur:.2f} EUR (Gain d'acquisition sous les 300k EUR apres abattement)
+       Case 1UZ: {summary.total_valid_tax_relief_eur:.2f} EUR (Abattement pour duree de detention, sur le gain d'acquisition sous les 300k EUR)
+       Case 1TT: {summary.total_corrected_vest_gain_eur_above300k:.2f} EUR (Gain d'acquisition au dessus des 300k EUR). Laisser vide si 0.
+       Case 3VG: {summary.total_corrected_capital_gain_eur:.2f} EUR (Plus-value de cession)
+       
+    """
+    
+    trs_to_declare = [tr for tr in trs if tr.total_corrected_capital_gain_eur > 0.1]
+    trs_to_declare.sort(key=lambda x: (x.sale_date, x.vest_date))
+    
+    s += f"""
+    - Remplir le formulaire 2074
+        Nombre de transactions a declarer: {len(trs_to_declare)}
+        
+    """
+    
+    for i, tr in enumerate(trs_to_declare):
+        s += f"""
+        -------------------------------------------------------------------
+        Titre {i+1:02d}:
+        - 511 (Designation): META Platforms Inc.
+        - 512 (Date cession): {tr.sale_date.strftime("%d/%m/%Y")}
+        - 514 (Valeur de cession unitaire): {tr.sale_price_eur:.2f} EUR
+        - 515 (Quantite): {tr.num_shares}
+        - 516 (Valeur totale): {tr.total_sale_price_eur:.2f} EUR
+        - 517 (Frais): Laisser vide
+        - 518 (Valeur nette): {tr.total_sale_price_eur:.2f} EUR
+        - 520 (Valeur d'acquisition unitaire): {tr.vest_price_eur:.2f} EUR
+        - 521 (Prix d'acquisition global): {tr.total_corrected_vest_gain_eur:.2f} EUR
+        - 522 (Frais): Laisser vide
+        - 523 (Prix de revient): {tr.total_corrected_vest_gain_eur:.2f} EUR
+        - 524 (Plus-value de cession): +{tr.total_corrected_capital_gain_eur:.2f} EUR
+        -------------------------------------------------------------------
+        """
+        
+    s += f"""
+    - Remplir le formulaire 2047
+        - Plus value avant abattement: Etats-Unis - {summary.total_corrected_capital_gain_eur:.2f} EUR (pareil que 3VG)
+    """
+    
+    with open(txt_filename, "w") as f:
+        f.write(s)
 
 
 @click.command()
-@click.option("--swchab_json", help="Input JSON file containing the Schwab RSU data")
+@click.option("--schwab_json", help="Input JSON file containing the Schwab RSU data")
+@click.option("--year", type=int, help="Fiscal year (eg. 2023)")
 @click.option("--output_dir", help="Output directory path")
 @click.option(
-    "--eur_change_csv", help="CSV file containing the EUR to USD exchange rate data"
+    "--eur_xr_csv", help="CSV file containing the EUR to USD exchange rate data"
 )
-@click.option("--year", type=int, help="Year")
-def main(input, output, year):
-    transactions = load_transactions_details(input, output, year)
-    processed = process_all_transactions(transactions)
-    summary = generate_summary(processed)
-    write_output_csv(processed, output)
-    write_tax_estimate(summary, output)
-    write_instructions(summary, output)
+@click.option(
+    "--mtr", type=float, default=0.41, help="Marginal tax rate"
+)
+def main(schwab_json, year, output_dir, eur_xr_csv, mtr):
+    xr_data = ExchangeRateData(eur_xr_csv)
+    
+    transactions = load_transactions_details(schwab_json, year)
+    transactions = group_transactions(transactions)
+    processed = process_all_transactions(transactions, xr_data)
+    summary = generate_summary(processed, mtr=0.41)
+    
+    write_output_csv(processed, f"{output_dir}/rsu_{year}.csv")
+    write_tax_estimate(summary, f"{output_dir}/rsu_tax_estimate_{year}.txt")
+    write_instructions(summary, processed, f"{output_dir}/rsu_tax_instructions_{year}.txt")
 
 
 if __name__ == "__main__":
