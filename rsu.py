@@ -5,14 +5,32 @@ from dataclasses import dataclass
 from datetime import timedelta
 import json
 from collections import defaultdict
-from typing import List
+from typing import List, Optional
+import requests
+from pathlib import Path
 
 
 class ExchangeRateData:
-    def __init__(self, exchange_rate_csv: str):
+    def __init__(self, exchange_rate_csv: Optional[Path]):
         self.exchange_rate_csv = exchange_rate_csv
         self.usd_change_rate_by_day = {}
+        if not self.exchange_rate_csv or not self.exchange_rate_csv.is_file():
+            self._download_exchange_rate_data()
         self._load_exchange_rate_data()
+
+    def _download_exchange_rate_data(self):
+        # Found by Luca W.
+        url = "http://webstat.banque-france.fr/fr/downloadFile.do?id=5385698&exportType=csv"
+        response = requests.get(url)
+        if response.status_code == 200:
+            self.exchange_rate_csv = Path("exchange_rate.csv")
+            with open(self.exchange_rate_csv, "wb") as file:
+                file.write(response.content)
+            print("Downloaded exchange rate data to exchange_rate.csv")
+        else:
+            raise FileNotFoundError(
+                "Failed to download the exchange rate data. Try downloading the file manually."
+            )
 
     def _load_exchange_rate_data(self):
         # The format of this file is a bit weird.
@@ -281,7 +299,9 @@ def process_transaction(
             # We cant subtract more that the total acquisition gain, so we set it to 0
             # and still report a loss in the capital gain
             total_corrected_vest_gain_eur = 0
-            total_corrected_capital_gain_eur = total_vest_gain_eur + total_capital_gain_eur
+            total_corrected_capital_gain_eur = (
+                total_vest_gain_eur + total_capital_gain_eur
+            )
     else:
         total_corrected_vest_gain_eur = total_vest_gain_eur
         total_corrected_capital_gain_eur = total_capital_gain_eur
@@ -352,7 +372,9 @@ def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary
     total_sale_price_eur = sum(tr.total_sale_price_eur for tr in trs)
     total_tax_relief_eur = sum(tr.taxe_relief_eur for tr in trs)
     total_corrected_vest_gain_eur = sum(tr.total_corrected_vest_gain_eur for tr in trs)
-    total_corrected_capital_gain_eur = sum(tr.total_corrected_capital_gain_eur for tr in trs)
+    total_corrected_capital_gain_eur = sum(
+        tr.total_corrected_capital_gain_eur for tr in trs
+    )
 
     # TODO(lowik) Not sure how to deal with the case where the acquisition gain is above 300k
     # and the tax relief is applied only on the first 300k.
@@ -455,6 +477,7 @@ def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: str):
     # Use this format so that Google Sheets can parse the number correctly
     df_rounded.to_csv(csv_filename, sep="\t", float_format="%.2f", decimal=",")
 
+
 def write_tax_estimate(summary: TaxSummary, txt_filename: str):
     s = f"""
     Montant total de la vente: {summary.total_sale_price_eur:.2f} EUR
@@ -471,8 +494,11 @@ def write_tax_estimate(summary: TaxSummary, txt_filename: str):
     """
     with open(txt_filename, "w") as f:
         f.write(s)
-    
-def write_instructions(summary: TaxSummary, trs: List[TransactionDetailsProcessed], txt_filename: str):
+
+
+def write_instructions(
+    summary: TaxSummary, trs: List[TransactionDetailsProcessed], txt_filename: str
+):
     s = f"""
     Instructions:
     - Remplir le formulaire 2042 C
@@ -482,16 +508,16 @@ def write_instructions(summary: TaxSummary, trs: List[TransactionDetailsProcesse
        Case 3VG: {summary.total_corrected_capital_gain_eur:.2f} EUR (Plus-value de cession)
        
     """
-    
+
     trs_to_declare = [tr for tr in trs if tr.total_corrected_capital_gain_eur > 0.1]
     trs_to_declare.sort(key=lambda x: (x.sale_date, x.vest_date))
-    
+
     s += f"""
     - Remplir le formulaire 2074
         Nombre de transactions a declarer: {len(trs_to_declare)}
         
     """
-    
+
     for i, tr in enumerate(trs_to_declare):
         s += f"""
         -------------------------------------------------------------------
@@ -510,14 +536,17 @@ def write_instructions(summary: TaxSummary, trs: List[TransactionDetailsProcesse
         - 524 (Plus-value de cession): +{tr.total_corrected_capital_gain_eur:.2f} EUR
         -------------------------------------------------------------------
         """
-        
+
     s += f"""
     - Remplir le formulaire 2047
         - Plus value avant abattement: Etats-Unis - {summary.total_corrected_capital_gain_eur:.2f} EUR (pareil que 3VG)
     """
-    
+
     with open(txt_filename, "w") as f:
         f.write(s)
+
+
+from typing import Optional
 
 
 @click.command()
@@ -525,22 +554,23 @@ def write_instructions(summary: TaxSummary, trs: List[TransactionDetailsProcesse
 @click.option("--year", type=int, help="Fiscal year (eg. 2023)")
 @click.option("--output_dir", help="Output directory path")
 @click.option(
-    "--eur_xr_csv", help="CSV file containing the EUR to USD exchange rate data"
+    "--eur_xr_csv",
+    default=None,
+    type=click.Path(),
+    help="CSV file containing the EUR to USD exchange rate data. Will be downloaded if not provided.",
 )
-@click.option(
-    "--mtr", type=float, default=0.41, help="Marginal tax rate"
-)
-def main(schwab_json, year, output_dir, eur_xr_csv, mtr):
+@click.option("--mtr", type=float, default=0.41, help="Marginal tax rate")
+def main(schwab_json, year, output_dir, eur_xr_csv: Optional[Path], mtr):
     xr_data = ExchangeRateData(eur_xr_csv)
-    
+
     transactions = load_transactions_details(schwab_json, year)
     transactions = group_transactions(transactions)
     processed = process_all_transactions(transactions, xr_data)
     summary = generate_summary(processed, mtr=0.41)
-    
+
     write_output_csv(processed, f"{output_dir}/rsu_{year}.csv")
-    write_tax_estimate(summary, f"{output_dir}/rsu_tax_estimate_{year}.txt")
-    write_instructions(summary, processed, f"{output_dir}/rsu_tax_instructions_{year}.txt")
+    write_tax_estimate(summary, f"{output_dir}/rsu_tax_estimate_{year}")
+    write_instructions(summary, processed, f"{output_dir}/rsu_tax_instructions_{year}")
 
 
 if __name__ == "__main__":
