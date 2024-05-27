@@ -20,10 +20,11 @@ You need to download your data from the Schwab website.
 - Login to your Schwab account
 - Go to Account -> History
 - Select "Equity Award"
-- Select "Previous 4 Years" or enter a custom range that includes the period included in your tax declaration
+- Select "Previous 4 Years" or enter a custom range that includes the period for your tax declaration
+- Click on Search (to actually use the date range)
 - Click Export (top left) and choose the JSON format
 
-Then, run the script, by providing the path to the Schwab data, the fiscal year and a directory to write the results
+Then, run the script, by providing the path to the Schwab data, the year to declare and a directory to write the results
 ```bash
 python rsu.py --schwab_json=EquityAwardsCenter_Transactions_20240208190934.json --year=2023 --output_dir=.
 ```

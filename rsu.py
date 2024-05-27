@@ -446,7 +446,7 @@ def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary
     )
 
 
-def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: str):
+def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: Path):
     trs.sort(key=lambda x: (x.sale_date, x.vest_date))
     df = pd.DataFrame(trs)
     # Define the mapping between new names and old names
@@ -477,7 +477,7 @@ def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: str):
     df.to_csv(csv_filename, sep="\t", float_format="%.4f", decimal=",")
 
 
-def write_tax_estimate(summary: TaxSummary, txt_filename: str):
+def write_tax_estimate(summary: TaxSummary, txt_filename: Path):
     s = f"""
     Montant total de la vente: {summary.total_sale_price_eur:.2f} EUR
     Montant total des impots: {summary.total_tax:.2f} EUR
@@ -496,7 +496,7 @@ def write_tax_estimate(summary: TaxSummary, txt_filename: str):
 
 
 def write_instructions(
-    summary: TaxSummary, trs: List[TransactionDetailsProcessed], txt_filename: str
+    summary: TaxSummary, trs: List[TransactionDetailsProcessed], txt_filename: Path
 ):
     s = f"""
     Instructions:
@@ -550,27 +550,41 @@ from typing import Optional
 
 
 @click.command()
-@click.option("--schwab_json", help="Input JSON file containing the Schwab RSU data")
+@click.option(
+    "--schwab_json",
+    type=click.Path(exists=True, path_type=Path),
+    help="Input JSON file containing the Schwab RSU data",
+)
 @click.option("--year", type=int, help="Fiscal year (eg. 2023)")
-@click.option("--output_dir", help="Output directory path")
+@click.option(
+    "--output_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Output directory path",
+)
 @click.option(
     "--eur_xr_csv",
     default=None,
-    type=click.Path(),
+    type=click.Path(path_type=Path),
     help="CSV file containing the EUR to USD exchange rate data. Will be downloaded if not provided.",
 )
 @click.option("--mtr", type=float, default=0.41, help="Marginal tax rate")
-def main(schwab_json, year, output_dir, eur_xr_csv: Optional[Path], mtr):
+def main(
+    schwab_json: Path,
+    year: int,
+    output_dir: Path,
+    eur_xr_csv: Optional[Path],
+    mtr: float,
+):
     xr_data = ExchangeRateData(eur_xr_csv)
 
     transactions = load_transactions_details(schwab_json, year)
     transactions = group_transactions(transactions)
     processed = process_all_transactions(transactions, xr_data)
-    summary = generate_summary(processed, mtr=0.41)
+    summary = generate_summary(processed, mtr)
 
-    write_output_csv(processed, f"{output_dir}/rsu_{year}.csv")
-    write_tax_estimate(summary, f"{output_dir}/rsu_tax_estimate_{year}")
-    write_instructions(summary, processed, f"{output_dir}/rsu_tax_instructions_{year}")
+    write_output_csv(processed, output_dir / f"rsu_{year}.csv")
+    write_tax_estimate(summary, output_dir / f"rsu_tax_estimate_{year}")
+    write_instructions(summary, processed, output_dir / f"rsu_tax_instructions_{year}")
 
 
 if __name__ == "__main__":
