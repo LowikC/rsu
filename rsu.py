@@ -509,6 +509,7 @@ def write_instructions(
        
     """
 
+    # TODO(lowik) Transaction with a remaining capital loss should be declared as well (or the capital loss should be subtracted from the total acquisition gain)
     trs_to_declare = [tr for tr in trs if tr.total_corrected_capital_gain_eur > 0.1]
     trs_to_declare.sort(key=lambda x: (x.sale_date, x.vest_date))
 
