@@ -558,7 +558,7 @@ from typing import Optional
 @click.option("--year", type=int, help="Fiscal year (eg. 2023)")
 @click.option(
     "--output_dir",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(file_okay=False, path_type=Path),
     help="Output directory path",
 )
 @click.option(
@@ -582,6 +582,7 @@ def main(
     processed = process_all_transactions(transactions, xr_data)
     summary = generate_summary(processed, mtr)
 
+    output_dir.mkdir(exist_ok=True, parents=True)
     write_output_csv(processed, output_dir / f"rsu_{year}.csv")
     write_tax_estimate(summary, output_dir / f"rsu_tax_estimate_{year}")
     write_instructions(summary, processed, output_dir / f"rsu_tax_instructions_{year}")

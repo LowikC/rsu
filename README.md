@@ -1,6 +1,6 @@
 # RSU
 
-This project is used to facilitate tax declaration for french RSU.
+A tool to help with the French tax declaration of RSUs.
 
 ## Installation
 
