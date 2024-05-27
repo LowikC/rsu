@@ -1,13 +1,13 @@
-import click
-import pandas as pd
-from datetime import datetime
-from dataclasses import dataclass
-from datetime import timedelta
 import json
 from collections import defaultdict
-from typing import List, Optional
-import requests
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import List, Optional
+
+import click
+import pandas as pd
+import requests
 
 
 class ExchangeRateData:
@@ -473,9 +473,8 @@ def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: str):
     }
     # Rename the columns using the mapping
     df = df.rename(columns=column_mapping)
-    df_rounded = df.round(4)
     # Use this format so that Google Sheets can parse the number correctly
-    df_rounded.to_csv(csv_filename, sep="\t", float_format="%.2f", decimal=",")
+    df.to_csv(csv_filename, sep="\t", float_format="%.4f", decimal=",")
 
 
 def write_tax_estimate(summary: TaxSummary, txt_filename: str):
