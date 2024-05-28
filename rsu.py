@@ -501,11 +501,11 @@ def write_instructions(
     s = f"""
     Instructions:
     - Remplir le formulaire 2042 C
-       Case 1TZ: {summary.total_corrected_vest_gain_eur_below300k - summary.total_valid_tax_relief_eur:.2f} EUR (Gain d'acquisition sous les 300k EUR apres abattement)
-       Case 1UZ: {summary.total_valid_tax_relief_eur:.2f} EUR (Abattement pour duree de detention, sur le gain d'acquisition sous les 300k EUR)
-       Case 1TT: {summary.total_corrected_vest_gain_eur_above300k:.2f} EUR (Gain d'acquisition au dessus des 300k EUR). Laisser vide si 0.
-       Case 3VG: {summary.total_corrected_capital_gain_eur:.2f} EUR (Plus-value de cession)
-       
+       Case 1TZ: {summary.total_corrected_vest_gain_eur_below300k - summary.total_valid_tax_relief_eur:.0f} EUR (Gain d'acquisition sous les 300k EUR apres abattement)
+       Case 1UZ: {summary.total_valid_tax_relief_eur:.0f} EUR (Abattement pour duree de detention, sur le gain d'acquisition sous les 300k EUR)
+       Case 1TT: {summary.total_corrected_vest_gain_eur_above300k:.0f} EUR (Gain d'acquisition au dessus des 300k EUR). Laisser vide si 0.
+       Case 3VG: {summary.total_corrected_capital_gain_eur:.0f} EUR (Plus-value de cession)
+       Attention, le montant de la case 3VG sera peut etre a modifier, apres remplissage du formulaire 2074.
     """
 
     # TODO(lowik) Transaction with a remaining capital loss should be declared as well (or the capital loss should be subtracted from the total acquisition gain)
@@ -526,20 +526,27 @@ def write_instructions(
         - 512 (Date cession): {tr.sale_date.strftime("%d/%m/%Y")}
         - 514 (Valeur de cession unitaire): {tr.sale_price_eur:.2f} EUR
         - 515 (Quantite): {tr.num_shares}
-        - 516 (Valeur totale): {tr.total_sale_price_eur:.2f} EUR
+        - 516 (Valeur totale): {tr.total_sale_price_eur:.0f} EUR
         - 517 (Frais): Laisser vide
-        - 518 (Valeur nette): {tr.total_sale_price_eur:.2f} EUR
+        - 518 (Valeur nette): {tr.total_sale_price_eur:.0f} EUR
         - 520 (Valeur d'acquisition unitaire): {tr.vest_price_eur:.2f} EUR
-        - 521 (Prix d'acquisition global): {tr.total_corrected_vest_gain_eur:.2f} EUR
+        - 521 (Prix d'acquisition global): {tr.total_corrected_vest_gain_eur:.0f} EUR
         - 522 (Frais): Laisser vide
-        - 523 (Prix de revient): {tr.total_corrected_vest_gain_eur:.2f} EUR
-        - 524 (Plus-value de cession): +{tr.total_corrected_capital_gain_eur:.2f} EUR
+        - 523 (Prix de revient): {tr.total_corrected_vest_gain_eur:.0f} EUR
+        - 524 (Plus-value de cession): +{tr.total_corrected_capital_gain_eur:.0f} EUR
         -------------------------------------------------------------------
         """
 
     s += f"""
+        Notez la plus value totale obtenue.
+    
+        1133: Titre A / Colonne A : Recopiez la valeur obtenue, pour qu'elle soit reportee en case 3VG.
+        Si la valeur est differente de celle de la case 3VG, retournez au formulaire 2042 C pour ajuster la case 3VG.
+    """
+
+    s += f"""
     - Remplir le formulaire 2047
-        - Plus value avant abattement: Etats-Unis - {summary.total_corrected_capital_gain_eur:.2f} EUR (pareil que 3VG)
+        - Plus value avant abattement: Etats-Unis - {summary.total_corrected_capital_gain_eur:.0f} EUR (pareil que 3VG)
     """
 
     with open(txt_filename, "w") as f:
