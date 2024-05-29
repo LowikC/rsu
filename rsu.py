@@ -468,8 +468,8 @@ def write_output_csv(trs: List[TransactionDetailsProcessed], csv_filename: Path)
         "eligible_for_tax_relief_50p": "Eligible abattement pour duree de detention entre 2 ans et 8 ans",
         "eligible_for_tax_relief_65p": "Eligible abattement pour duree de detention superieure a 8 ans",
         "taxe_relief_eur": "Abattement (EUR)",
-        "corrected_vest_gain_eur": "Gain d'acquisition apres imputation des moins-values de cession (EUR)",
-        "corrected_capital_gain_eur": "Plus-value de cession apres imputation des moins-values de cession (EUR)",
+        "total_corrected_vest_gain_eur": "Gain d'acquisition apres imputation des moins-values de cession (EUR)",
+        "total_corrected_capital_gain_eur": "Plus-value de cession apres imputation des moins-values de cession (EUR)",
     }
     # Rename the columns using the mapping
     df = df.rename(columns=column_mapping)
