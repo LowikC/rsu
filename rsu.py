@@ -498,6 +498,8 @@ def write_tax_estimate(summary: TaxSummary, txt_filename: Path):
 def write_instructions(
     summary: TaxSummary, trs: List[TransactionDetailsProcessed], txt_filename: Path
 ):
+    # TODO(lowik) Transaction with a remaining capital loss should be declared as well (or the capital loss should be subtracted from the total acquisition gain)
+
     s = f"""
     Instructions:
     - Remplir le formulaire 2042 C
@@ -508,9 +510,17 @@ def write_instructions(
        Attention, le montant de la case 3VG sera peut etre a modifier, apres remplissage du formulaire 2074.
     """
 
-    # TODO(lowik) Transaction with a remaining capital loss should be declared as well (or the capital loss should be subtracted from the total acquisition gain)
     trs_to_declare = [tr for tr in trs if tr.total_corrected_capital_gain_eur > 0.1]
     trs_to_declare.sort(key=lambda x: (x.sale_date, x.vest_date))
+
+    if not trs_to_declare:
+        s += f"""
+        Aucune transaction n'a de plus-value de cession a declarer.
+        Vous n'avez pas besoin de remplir le formulaire 2074, ni le formulaire 2047.
+        """
+        with open(txt_filename, "w") as f:
+            f.write(s)
+        return
 
     s += f"""
     - Remplir le formulaire 2074
@@ -562,7 +572,7 @@ from typing import Optional
     type=click.Path(exists=True, path_type=Path),
     help="Input JSON file containing the Schwab RSU data",
 )
-@click.option("--year", type=int, help="Fiscal year (eg. 2023)")
+@click.option("--year", type=int, help="Year to process the data for")
 @click.option(
     "--output_dir",
     type=click.Path(file_okay=False, path_type=Path),
