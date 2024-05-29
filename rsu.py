@@ -137,19 +137,11 @@ class TaxSummary:
     total_corrected_vest_gain_eur: float
     # Total capital gain over all transactions, after removing capital losses
     total_corrected_capital_gain_eur: float
-    # Total acquisition gain over all transactions, below 300K EUR
-    total_corrected_vest_gain_eur_below300k: float
-    # Total acquisition gain over all transactions, above 300K EUR
-    total_corrected_vest_gain_eur_above300k: float
-    # Total tax relief over all transactions, that is applicable on the acquistion gain below 300k EUR
-    total_valid_tax_relief_eur: float
 
     # Social contributions on the corrected acquisition gain
     social_contributions_on_vest_gain: float
     # Tax on the on the corrected acquistion gain
     tax_on_vest_gain: float
-    # Salary contribution on the corrected acquisition gain
-    salary_contribution: float
     # Tax on the corrected capital gain
     tax_on_capital_gain: float
     # Total tax to be paid
@@ -376,54 +368,19 @@ def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary
         tr.total_corrected_capital_gain_eur for tr in trs
     )
 
-    # TODO(lowik) Not sure how to deal with the case where the acquisition gain is above 300k
-    # and the tax relief is applied only on the first 300k.
-    # For now:
-    # - compute the average tax relief percentage
-    # - split the total acquisition gain between the first 300k and the rest
-    # - apply the average tax relief percentage on the first 300k
-    avg_tax_relief_percentage = total_tax_relief_eur / total_corrected_vest_gain_eur
-    threshold = 300000
-    if total_corrected_vest_gain_eur > threshold:
-        total_corrected_vest_gain_eur_below300k = threshold
-        total_corrected_vest_gain_eur_above300k = (
-            total_corrected_vest_gain_eur - threshold
-        )
-        total_valid_tax_relief_eur = threshold * avg_tax_relief_percentage
-    else:
-        total_corrected_vest_gain_eur_below300k = total_corrected_vest_gain_eur
-        total_corrected_vest_gain_eur_above300k = 0
-        total_valid_tax_relief_eur = total_tax_relief_eur
-
     # Compute taxes
     # Taxes on acquisition gain
-    # for the part below 300k, it's 17.2% of social contribution on the full acquisition gain
+    # We are in the Macron 1 regime, we don't need to distinguish between above or below 300K for the acquisition gain.
+    # it's 17.2% of social contribution on the full acquisition gain
     # and MTR (Marginal tax Rate) on the acquistion gain minus the tax relief
-    social_contributions_on_vest_gain = (
-        17.2 / 100 * total_corrected_vest_gain_eur_below300k
-    )
-    tax_on_vest_gain = mtr * (
-        total_corrected_vest_gain_eur_below300k - total_valid_tax_relief_eur
-    )
-    salary_contribution = 0
-
-    # for the part above 300k
-    # It's 9.7% of social contributions and MTR on the full acquisition gain (no tax relief)
-    # There's also a 10% salary contribution
-    social_contributions_on_vest_gain += (
-        9.7 / 100 * total_corrected_vest_gain_eur_above300k
-    )
-    tax_on_vest_gain += mtr * total_corrected_vest_gain_eur_above300k
-    salary_contribution += 10 / 100 * total_corrected_vest_gain_eur_above300k
+    social_contributions_on_vest_gain = 17.2 / 100 * total_corrected_vest_gain_eur
+    tax_on_vest_gain = mtr * (total_corrected_vest_gain_eur - total_tax_relief_eur)
 
     # Tax on capital gain, it's the 30% flat tax
     tax_on_capital_gain = 30 / 100 * total_corrected_capital_gain_eur
 
     total_taxes = (
-        social_contributions_on_vest_gain
-        + tax_on_vest_gain
-        + tax_on_capital_gain
-        + salary_contribution
+        social_contributions_on_vest_gain + tax_on_vest_gain + tax_on_capital_gain
     )
     total_tax_rate = total_taxes / total_sale_price_eur
 
@@ -434,12 +391,8 @@ def generate_summary(trs: TransactionDetailsProcessed, mtr: float) -> TaxSummary
         total_tax_relief_eur=total_tax_relief_eur,
         total_corrected_vest_gain_eur=total_corrected_vest_gain_eur,
         total_corrected_capital_gain_eur=total_corrected_capital_gain_eur,
-        total_corrected_vest_gain_eur_below300k=total_corrected_vest_gain_eur_below300k,
-        total_corrected_vest_gain_eur_above300k=total_corrected_vest_gain_eur_above300k,
-        total_valid_tax_relief_eur=total_valid_tax_relief_eur,
         social_contributions_on_vest_gain=social_contributions_on_vest_gain,
         tax_on_vest_gain=tax_on_vest_gain,
-        salary_contribution=salary_contribution,
         tax_on_capital_gain=tax_on_capital_gain,
         total_tax=total_taxes,
         total_tax_rate=total_tax_rate,
@@ -487,7 +440,6 @@ def write_tax_estimate(summary: TaxSummary, txt_filename: Path):
     - Gain d'acquisition total: {summary.total_corrected_vest_gain_eur:.2f} EUR
         - Contributions sociales sur le gain d'acquisition: {summary.social_contributions_on_vest_gain:.2f} EUR
         - Impots sur le gain d'acquisition: {summary.tax_on_vest_gain:.2f} EUR
-        - Contribution salariale sur le gain d'acquisition: {summary.salary_contribution:.2f} EUR
     - Plus-value de cession total: {summary.total_corrected_capital_gain_eur:.2f} EUR
         - Impots sur la plus-value de cession: {summary.tax_on_capital_gain:.2f} EUR
     """
@@ -503,9 +455,8 @@ def write_instructions(
     s = f"""
     Instructions:
     - Remplir le formulaire 2042 C
-       Case 1TZ: {summary.total_corrected_vest_gain_eur_below300k - summary.total_valid_tax_relief_eur:.0f} EUR (Gain d'acquisition sous les 300k EUR apres abattement)
-       Case 1UZ: {summary.total_valid_tax_relief_eur:.0f} EUR (Abattement pour duree de detention, sur le gain d'acquisition sous les 300k EUR)
-       Case 1TT: {summary.total_corrected_vest_gain_eur_above300k:.0f} EUR (Gain d'acquisition au dessus des 300k EUR). Laisser vide si 0.
+       Case 1TZ: {summary.total_corrected_vest_gain_eur - summary.total_tax_relief_eur:.0f} EUR (Gain d'acquisition apres abattement)
+       Case 1UZ: {summary.total_tax_relief_eur:.0f} EUR (Abattement pour duree de detention)
        Case 3VG: {summary.total_corrected_capital_gain_eur:.0f} EUR (Plus-value de cession)
        Attention, le montant de la case 3VG sera peut etre a modifier, apres remplissage du formulaire 2074.
     """

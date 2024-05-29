@@ -42,7 +42,6 @@ Some rules for the declaration are not perfectly clear to me (even after reading
 I made the following assumptions:
 - we can process sales line by line (one line = a unique (vest date, sale date)), for example, subtract the capital loss from acquisition gain for each line.
 - a line with capital gain = 0 doesn't need to be declared in the form 2074
-- we apply the average tax relief (computed over all sales) on the acquisition gain below 300K. The tax relief can't be apply on the acquisition gain above 300K EUR.
 - for tax estimation, I didn't take into account the "contribution exceptionnelle sur les hauts revenus" (exceptional contribution on high incomes) as it requires additional calculations and is beyond the scope of this script.
 
 Known bugs:
