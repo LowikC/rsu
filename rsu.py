@@ -551,7 +551,7 @@ def write_instructions(
         Notez la plus value totale obtenue.
     
         1133: Titre A / Colonne A : Recopiez la valeur obtenue, pour qu'elle soit reportee en case 3VG.
-        Si la valeur est differente de celle de la case 3VG, retournez au formulaire 2042 C pour ajuster la case 3VG.
+        Si la valeur est differente de celle de la case 3VG, retournez au formulaire 2042 C pour ajuster la case 3VG si besoin.
     """
 
     s += f"""
