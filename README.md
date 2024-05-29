@@ -1,6 +1,6 @@
 # RSU
 
-A tool to help with the French tax declaration of RSUs.
+A tool to help with the French tax declaration of RSUs (Macron 1 tax regime).
 
 ## Installation
 
@@ -40,6 +40,7 @@ You'll find 3 files in the output directory:
 Some rules for the declaration are not perfectly clear to me (even after reading the official instructions many times).  
 
 I made the following assumptions:
+- we are in the "Macron 1" tax regime (ie AGE between 8/8/2015 and 30/12/2016)
 - we can process sales line by line (one line = a unique (vest date, sale date)), for example, subtract the capital loss from acquisition gain for each line.
 - a line with capital gain = 0 doesn't need to be declared in the form 2074
 - for tax estimation, I didn't take into account the "contribution exceptionnelle sur les hauts revenus" (exceptional contribution on high incomes) as it requires additional calculations and is beyond the scope of this script.
