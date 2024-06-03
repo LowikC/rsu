@@ -228,7 +228,11 @@ def group_transactions(
     grouped_transactions = defaultdict(list)
 
     for transaction in transactions:
-        key = (transaction.vest_date, transaction.sale_date)
+        # Group by vest date and sale date, but also by sale/vest prices (in case of multiple transactions on the same day with different prices)
+        # We multiply by 1000 to avoid floating point errors when hashing the key
+        ksale_price = int(round(transaction.sale_price_usd * 1000))
+        kvest_price = int(round(transaction.vest_price_usd * 1000))
+        key = (transaction.vest_date, transaction.sale_date, ksale_price, kvest_price)
         grouped_transactions[key].append(transaction)
 
     # Now, reduce each group
