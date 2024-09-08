@@ -20,7 +20,7 @@ class ExchangeRateData:
 
     def _download_exchange_rate_data(self):
         # Found by Luca W.
-        url = "http://webstat.banque-france.fr/fr/downloadFile.do?id=5385698&exportType=csv"
+        url = "https://dataweb-laval.jouve-hdi.com/fr/downloadFile.do?id=5385698&exportType=csv"
         response = requests.get(url)
         if response.status_code == 200:
             self.exchange_rate_csv = Path("exchange_rate.csv")
