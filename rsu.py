@@ -19,8 +19,9 @@ class ExchangeRateData:
         self._load_exchange_rate_data()
 
     def _download_exchange_rate_data(self):
-        # Found by Luca W.
-        url = "https://dataweb-laval.jouve-hdi.com/fr/downloadFile.do?id=5385698&exportType=csv"
+        # This link is given on this page https://webstat.banque-france.fr/fr/questions-frequentes/
+        # It contains the exchange rates for many currencies, including EUR to USD, starting from 1999.
+        url = "https://webstat.banque-france.fr/export/csv-columns/fr/selection/5385698"
         response = requests.get(url)
         if response.status_code == 200:
             self.exchange_rate_csv = Path("exchange_rate.csv")
@@ -63,7 +64,8 @@ class ExchangeRateData:
         Raises:
             KeyError: If the exchange rate data is not available for this date.
         """
-        date_str = date.strftime("%d/%m/%Y")
+        # The date is in the format "YYYY-MM-DD" in the original csv data
+        date_str = date.strftime("%Y-%m-%d")
         return self.usd_change_rate_by_day[date_str]
 
 
